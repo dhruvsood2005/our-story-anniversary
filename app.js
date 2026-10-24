@@ -1,5 +1,9 @@
 const progressBar = document.querySelector('#reading-progress');
 const soundToggle = document.querySelector('#sound-toggle');
+const musicToggle = document.querySelector('#music-toggle');
+const musicPlayer = document.querySelector('#music-player');
+const musicClose = document.querySelector('#music-close');
+const spotifyEmbed = document.querySelector('#spotify-embed');
 const lightbox = document.querySelector('#lightbox');
 const lightboxImage = document.querySelector('#lightbox-image');
 const lightboxClose = document.querySelector('#lightbox-close');
@@ -42,6 +46,10 @@ let pendingPageIndex = null;
 let pageTurnOverlay = null;
 let touchStartX = 0;
 let touchStartY = 0;
+let spotifyController;
+let spotifyReady = false;
+let musicIsPlaying = false;
+let pendingMusicPlay = false;
 
 function playClick(frequency = 520) {
   if (!soundEnabled) return;
@@ -69,6 +77,63 @@ soundToggle?.addEventListener('click', () => {
   soundToggle.textContent = soundEnabled ? 'sound on' : 'sound off';
   playClick(650);
 });
+
+function setMusicPanelOpen(isOpen) {
+  musicPlayer.classList.toggle('is-open', isOpen);
+  musicPlayer.setAttribute('aria-hidden', String(!isOpen));
+  musicToggle.setAttribute('aria-expanded', String(isOpen));
+}
+
+function updateMusicButton(isPlaying) {
+  musicIsPlaying = isPlaying;
+  musicToggle.textContent = isPlaying ? 'pause music' : 'play music';
+  musicToggle.setAttribute('aria-pressed', String(isPlaying));
+  musicToggle.setAttribute('aria-label', `${isPlaying ? 'Pause' : 'Play'} Tujhe Bhula Diya on this page`);
+}
+
+musicToggle?.addEventListener('click', () => {
+  setMusicPanelOpen(true);
+  if (!spotifyReady) {
+    pendingMusicPlay = true;
+    musicToggle.textContent = 'loading music';
+    return;
+  }
+  spotifyController.togglePlay();
+});
+
+musicClose?.addEventListener('click', () => {
+  pendingMusicPlay = false;
+  spotifyController?.pause();
+  updateMusicButton(false);
+  setMusicPanelOpen(false);
+});
+
+window.onSpotifyIframeApiReady = (IFrameAPI) => {
+  IFrameAPI.createController(spotifyEmbed, {
+    width: '100%',
+    height: 152,
+    uri: 'spotify:track:4r8JqkhpTb5tzSKKHnVJIJ'
+  }, (controller) => {
+    spotifyController = controller;
+    controller.addListener('ready', () => {
+      spotifyReady = true;
+      updateMusicButton(false);
+      if (pendingMusicPlay) {
+        pendingMusicPlay = false;
+        controller.play();
+      }
+    });
+    controller.addListener('playback_started', () => updateMusicButton(true));
+    controller.addListener('playback_update', (event) => {
+      if (!event.data.isBuffering) updateMusicButton(!event.data.isPaused);
+    });
+  });
+};
+
+const spotifyApiScript = document.createElement('script');
+spotifyApiScript.src = 'https://open.spotify.com/embed/iframe-api/v1';
+spotifyApiScript.async = true;
+document.body.append(spotifyApiScript);
 
 function updateReadingProgress() {
   const activePage = bookPages[currentPageIndex];
