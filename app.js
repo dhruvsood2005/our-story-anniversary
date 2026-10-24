@@ -4,6 +4,7 @@ const lightbox = document.querySelector('#lightbox');
 const lightboxImage = document.querySelector('#lightbox-image');
 const lightboxClose = document.querySelector('#lightbox-close');
 const chapterLinks = [...document.querySelectorAll('.chapter-nav a')];
+const bookShell = document.querySelector('.book-shell');
 const book = document.querySelector('#story-book');
 const bookPages = [...book.querySelectorAll(':scope > section')];
 const previousPage = document.querySelector('#previous-page');
@@ -38,6 +39,9 @@ let bookScrollFrame;
 let turnAnimationTimer;
 let pageSettleTimer;
 let pendingPageIndex = null;
+let pageTurnOverlay = null;
+let touchStartX = 0;
+let touchStartY = 0;
 
 function playClick(frequency = 520) {
   if (!soundEnabled) return;
@@ -96,18 +100,72 @@ function updatePageInterface(index) {
   updateReadingProgress();
 }
 
+function makePageFace(sourcePage, side) {
+  const face = document.createElement('div');
+  face.className = `page-flip-face page-flip-face-${side}`;
+
+  const copy = sourcePage.cloneNode(true);
+  copy.removeAttribute('id');
+  copy.classList.remove('is-current-page', 'page-turning-forward', 'page-turning-back');
+  copy.classList.add('page-flip-copy');
+  copy.setAttribute('aria-hidden', 'true');
+  copy.querySelectorAll('[id]').forEach((element) => element.removeAttribute('id'));
+  copy.querySelectorAll('.reveal').forEach((element) => element.classList.add('visible'));
+  copy.querySelectorAll('video').forEach((video) => {
+    video.removeAttribute('controls');
+    video.querySelectorAll('source').forEach((source) => source.removeAttribute('src'));
+  });
+
+  face.append(copy);
+  return { face, copy, scrollTop: sourcePage.scrollTop };
+}
+
+function createPageFlip(outgoingPage, targetPage, direction) {
+  pageTurnOverlay?.remove();
+  clearTimeout(turnAnimationTimer);
+
+  const overlay = document.createElement('div');
+  overlay.className = `page-flip-overlay page-flip-overlay-${direction}`;
+  overlay.setAttribute('aria-hidden', 'true');
+
+  const leaf = document.createElement('div');
+  leaf.className = 'page-flip-leaf';
+  const frontSource = direction === 'forward' ? outgoingPage : targetPage;
+  const backSource = direction === 'forward' ? targetPage : outgoingPage;
+  const front = makePageFace(frontSource, 'front');
+  const back = makePageFace(backSource, 'back');
+
+  leaf.append(front.face, back.face);
+  overlay.append(leaf);
+  bookShell.append(overlay);
+  front.copy.scrollTop = front.scrollTop;
+  back.copy.scrollTop = back.scrollTop;
+  pageTurnOverlay = overlay;
+  bookShell.classList.add('is-page-turning');
+
+  requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('is-animating')));
+  turnAnimationTimer = setTimeout(() => {
+    overlay.remove();
+    if (pageTurnOverlay === overlay) pageTurnOverlay = null;
+    bookShell.classList.remove('is-page-turning');
+  }, 980);
+}
+
 function turnToPage(index, options = {}) {
   const targetIndex = Math.max(0, Math.min(bookPages.length - 1, index));
+  if (targetIndex === currentPageIndex) {
+    if (options.instant) updatePageInterface(targetIndex);
+    return;
+  }
+  if (pageTurnOverlay && !options.instant) return;
+
   const targetPage = bookPages[targetIndex];
   const outgoingPage = bookPages[currentPageIndex];
   const direction = targetIndex > currentPageIndex ? 'forward' : 'back';
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  if (targetIndex !== currentPageIndex && !reduceMotion) {
-    clearTimeout(turnAnimationTimer);
-    outgoingPage.classList.add(`page-turning-${direction}`);
-    turnAnimationTimer = setTimeout(() => outgoingPage.classList.remove('page-turning-forward', 'page-turning-back'), 470);
-  }
+  targetPage.scrollTop = 0;
+  if (!options.instant && !reduceMotion) createPageFlip(outgoingPage, targetPage, direction);
 
   pendingPageIndex = targetIndex;
   clearTimeout(pageSettleTimer);
@@ -116,8 +174,7 @@ function turnToPage(index, options = {}) {
     updatePageInterface(nearestPageIndex());
   }, options.instant || reduceMotion ? 0 : 900);
 
-  targetPage.scrollTop = 0;
-  book.scrollTo({ left: targetPage.offsetLeft, behavior: options.instant || reduceMotion ? 'auto' : 'smooth' });
+  book.scrollTo({ left: targetPage.offsetLeft, behavior: 'auto' });
   updatePageInterface(targetIndex);
 
   if (options.updateHash !== false) history.replaceState(null, '', `#${targetPage.id}`);
@@ -141,6 +198,20 @@ bookPages.forEach((page) => page.addEventListener('scroll', updateReadingProgres
 
 previousPage.addEventListener('click', () => turnToPage(currentPageIndex - 1));
 nextPage.addEventListener('click', () => turnToPage(currentPageIndex + 1));
+
+book.addEventListener('touchstart', (event) => {
+  const touch = event.changedTouches[0];
+  touchStartX = touch.clientX;
+  touchStartY = touch.clientY;
+}, { passive: true });
+
+book.addEventListener('touchend', (event) => {
+  const touch = event.changedTouches[0];
+  const horizontalDistance = touch.clientX - touchStartX;
+  const verticalDistance = touch.clientY - touchStartY;
+  if (Math.abs(horizontalDistance) < 55 || Math.abs(horizontalDistance) < Math.abs(verticalDistance) * 1.2) return;
+  turnToPage(currentPageIndex + (horizontalDistance < 0 ? 1 : -1));
+}, { passive: true });
 
 document.querySelectorAll('a[href^="#"]').forEach((link) => {
   link.addEventListener('click', (event) => {
